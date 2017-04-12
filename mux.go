@@ -530,14 +530,14 @@ func (addr *Addr) String() string {
 
 func (conn *MuxConn) LocalAddr() (addr net.Addr) {
 	return &Addr{
-		Addr: conn.LocalAddr(),
+		Addr: conn.mux.conn.LocalAddr(),
 		id:   conn.id,
 	}
 }
 
 func (conn *MuxConn) RemoteAddr() (addr net.Addr) {
 	return &Addr{
-		Addr: conn.RemoteAddr(),
+		Addr: conn.mux.conn.RemoteAddr(),
 		id:   conn.id,
 	}
 }
