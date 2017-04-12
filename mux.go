@@ -34,6 +34,8 @@ type packet struct {
 	pktver  uint8
 	pktlen  uint16
 	payload []byte
+	die     chan bool
+	sig     chan bool
 }
 
 func packetUnmarshal(b []byte) packet {
@@ -304,6 +306,12 @@ func (mux *Mux) writeLoop() {
 				return
 			}
 		}
+		if pkt.die != nil && pkt.sig != nil {
+			select {
+			case <-pkt.die:
+			case pkt.sig <- true:
+			}
+		}
 	}
 }
 
@@ -348,6 +356,7 @@ type MuxConn struct {
 	die    chan bool
 	psech  chan bool
 	rsigch chan bool
+	wsigch chan bool
 	rtime  time.Time
 	wtime  time.Time
 	rbufs  [][]byte
@@ -362,6 +371,7 @@ func NewMuxConn(mux *Mux, id uint16, ver uint8) *MuxConn {
 		die:    make(chan bool),
 		psech:  make(chan bool),
 		rsigch: make(chan bool),
+		wsigch: make(chan bool),
 	}
 }
 
@@ -423,6 +433,7 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 				conn.rlock.Lock()
 			case <-time.After(conn.rtime.Sub(time.Now())):
 				err = &timeoutErr{op: fmt.Sprintf("read from %s", conn.RemoteAddr())}
+				return
 			}
 		} else {
 			select {
@@ -485,6 +496,8 @@ func (conn *MuxConn) Write(b []byte) (n int, err error) {
 		pktid:   conn.id,
 		pktver:  conn.ver,
 		pktype:  mpsh,
+		sig:     conn.wsigch,
+		die:     conn.die,
 		payload: b}
 	if conn.wtime.After(time.Now()) {
 		select {
@@ -498,6 +511,10 @@ func (conn *MuxConn) Write(b []byte) (n int, err error) {
 		err = conn.mux.writePacket(pkt)
 	}
 	if err == nil {
+		select {
+		case <-conn.die:
+		case <-conn.wsigch:
+		}
 		n += len(b)
 	}
 	return
