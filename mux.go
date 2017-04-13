@@ -85,7 +85,7 @@ func NewMux(conn net.Conn) (mux *Mux, err error) {
 		}
 	}()
 	for {
-		id := uint16(src.Int63() % 32768)
+		id := uint16(rand.Intn(32768))
 		err = mux.writePacket(packet{
 			pktid:  id,
 			pktype: msyn,
@@ -152,7 +152,6 @@ func (mux *Mux) getID() (id uint16, err error) {
 }
 
 var (
-	src     = rand.NewSource(time.Now().UnixNano())
 	zerobuf = make([]byte, 128)
 )
 
@@ -293,7 +292,7 @@ func (mux *Mux) writeLoop() {
 		}
 		pktbuf := make([]byte, pktHdrlen)
 		if len(pkt.payload) == 0 && pkt.pktype != mpsh {
-			pkt.payload = zerobuf[:int(src.Int63()%16)]
+			pkt.payload = zerobuf[:rand.Intn(16)]
 		}
 		pkt.marshal(pktbuf)
 		_, err := mux.conn.Write(pktbuf)
