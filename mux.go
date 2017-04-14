@@ -331,10 +331,18 @@ func (mux *Mux) doPshPacket(pkt packet) {
 	}
 	conn.rlock.Lock()
 	conn.rbufs = append(conn.rbufs, pkt.payload)
-	rbufslen := len(conn.rbufs)
+	var rbufsbytes int64
+	for _, v := range conn.rbufs {
+		rbufsbytes += int64(len(v))
+	}
+	var rpse bool
+	if rbufsbytes > int64(16*maxSeglen) && !conn.rpse {
+		conn.rpse = true
+		rpse = true
+	}
 	conn.rlock.Unlock()
 	conn.NotifyRead()
-	if rbufslen > 16 {
+	if rpse {
 		mux.async.run(func() {
 			mux.writePacket(packet{
 				pktid:  conn.id,
@@ -352,6 +360,7 @@ type MuxConn struct {
 	lock   sync.Mutex
 	rlock  sync.Mutex
 	pause  bool
+	rpse   bool
 	die    chan bool
 	psech  chan bool
 	rsigch chan bool
@@ -453,9 +462,12 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 			conn.rbufs = conn.rbufs[1:]
 		}
 	}
-	rbuslen := len(conn.rbufs)
+	flag := len(conn.rbufs) < 4 && conn.rpse
+	if flag {
+		conn.rpse = false
+	}
 	conn.rlock.Unlock()
-	if rbuslen < 4 {
+	if flag {
 		conn.mux.writePacket(packet{
 			pktid:  conn.id,
 			pktver: conn.ver,
