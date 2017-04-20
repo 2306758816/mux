@@ -109,6 +109,12 @@ func NewMux(conn net.Conn) (mux *Mux, err error) {
 	return
 }
 
+func (mux *Mux) NumOfConns() int {
+	mux.connsLock.Lock()
+	defer mux.connsLock.Unlock()
+	return len(mux.conns)
+}
+
 func (mux *Mux) Close() (err error) {
 	select {
 	default:
