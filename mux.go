@@ -369,6 +369,10 @@ func (mux *Mux) doPshPacket(pkt packet) {
 		rpse = true
 	}
 	conn.rlock.Unlock()
+	if rbufsbytes > int64(maxSeglen)*128 {
+		conn.Close()
+		return
+	}
 	conn.NotifyRead()
 	if rpse {
 		mux.async.run(func() {
@@ -491,9 +495,16 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 			conn.rbufs = conn.rbufs[1:]
 		}
 	}
-	flag := len(conn.rbufs) < 4 && conn.rpse
-	if flag {
-		conn.rpse = false
+	var flag bool
+	if conn.rpse {
+		var rbufsbytes int64
+		for _, v := range conn.rbufs {
+			rbufsbytes += int64(len(v))
+		}
+		if rbufsbytes < 4*int64(maxSeglen) {
+			flag = true
+			conn.rpse = false
+		}
 	}
 	conn.rlock.Unlock()
 	if flag {
