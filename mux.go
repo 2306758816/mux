@@ -29,13 +29,14 @@ const (
 )
 
 type packet struct {
-	pktype  uint8
-	pktid   uint16
-	pktver  uint8
-	pktlen  uint16
-	payload []byte
-	die     chan bool
-	sig     chan bool
+	pktype   uint8
+	pktid    uint16
+	pktver   uint8
+	pktlen   uint16
+	payload  []byte
+	payloads [][]byte
+	die      chan bool
+	sig      chan bool
 }
 
 func packetUnmarshal(b []byte) packet {
@@ -66,6 +67,7 @@ type Mux struct {
 	connsLock sync.Mutex
 	conns     map[uint16]*MuxConn
 	connVers  map[uint16]uint8
+	pool      sync.Pool
 }
 
 func NewMux(conn net.Conn) (mux *Mux, err error) {
@@ -76,6 +78,7 @@ func NewMux(conn net.Conn) (mux *Mux, err error) {
 		acceptch: make(chan *MuxConn),
 		conns:    make(map[uint16]*MuxConn),
 		connVers: make(map[uint16]uint8),
+		pool:     sync.Pool{New: func() interface{} { return make([]byte, 4096) }},
 	}
 	go mux.writeLoop()
 	defer func() {
@@ -223,11 +226,30 @@ func (mux *Mux) readPacket() (pkt packet, err error) {
 	}
 	pkt = packetUnmarshal(pktbuf)
 	// log.Println(err, pkt.pktid, pkt.pktlen, pkt.pktver, pkt.pktype)
-	if pkt.pktlen != 0 {
-		pkt.payload = make([]byte, int(pkt.pktlen))
-		_, err = io.ReadFull(mux.conn, pkt.payload)
-		if err != nil {
-			return
+	pktlen := int(pkt.pktlen)
+	switch pkt.pktype {
+	case mpsh:
+		for pktlen > 0 {
+			buf := mux.pool.Get().([]byte)
+			if len(buf) == 0 {
+				continue
+			} else if len(buf) > pktlen {
+				buf = buf[:pktlen]
+				mux.pool.Put(buf[pktlen:])
+				pktlen = 0
+			} else {
+				pktlen -= len(buf)
+			}
+			_, err = io.ReadFull(mux.conn, buf)
+			if err != nil {
+				return
+			}
+			pkt.payloads = append(pkt.payloads, buf)
+		}
+	default:
+		if pktlen > 0 {
+			buf := make([]byte, pktlen)
+			_, err = io.ReadFull(mux.conn, buf)
 		}
 	}
 	return
@@ -321,7 +343,7 @@ func (mux *Mux) writeLoop() {
 }
 
 func (mux *Mux) doPshPacket(pkt packet) {
-	if pkt.pktlen == 0 || len(pkt.payload) == 0 {
+	if pkt.pktlen == 0 || len(pkt.payloads) == 0 {
 		return
 	}
 	mux.connsLock.Lock()
@@ -336,7 +358,7 @@ func (mux *Mux) doPshPacket(pkt packet) {
 		return
 	}
 	conn.rlock.Lock()
-	conn.rbufs = append(conn.rbufs, pkt.payload)
+	conn.rbufs = append(conn.rbufs, pkt.payloads...)
 	var rbufsbytes int64
 	for _, v := range conn.rbufs {
 		rbufsbytes += int64(len(v))
@@ -463,6 +485,7 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 		nbytes := copy(b, conn.rbufs[0])
 		n += nbytes
 		b = b[nbytes:]
+		conn.mux.pool.Put(conn.rbufs[0][:nbytes])
 		conn.rbufs[0] = conn.rbufs[0][nbytes:]
 		if len(conn.rbufs[0]) == 0 {
 			conn.rbufs = conn.rbufs[1:]
