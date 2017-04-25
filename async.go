@@ -39,5 +39,9 @@ func (a *AsyncRunner) run(f func()) {
 		a.started = true
 		go a.worker()
 	}
-	a.funcs <- f
+	select {
+	case a.funcs <- f:
+	case <-time.After(time.Millisecond * 10):
+		go f()
+	}
 }
