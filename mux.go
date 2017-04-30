@@ -61,6 +61,7 @@ type Mux struct {
 	wlock     sync.Mutex
 	writech   chan packet
 	die       chan bool
+	destroy   bool
 	avalid    uint16
 	acceptch  chan *MuxConn
 	async     AsyncRunner
@@ -74,7 +75,7 @@ func NewMux(conn net.Conn) (mux *Mux, err error) {
 	mux = &Mux{
 		conn:     conn,
 		die:      make(chan bool),
-		writech:  make(chan packet),
+		writech:  make(chan packet, 16),
 		acceptch: make(chan *MuxConn),
 		conns:    make(map[uint16]*MuxConn),
 		connVers: make(map[uint16]uint8),
@@ -119,12 +120,19 @@ func (mux *Mux) NumOfConns() int {
 }
 
 func (mux *Mux) Close() (err error) {
+	mux.lock.Lock()
+	if mux.destroy {
+		mux.lock.Unlock()
+		return
+	}
+	mux.destroy = true
+	mux.lock.Unlock()
 	select {
 	default:
+		close(mux.die)
 	case <-mux.die:
 		return
 	}
-	close(mux.die)
 	err = mux.conn.Close()
 	var conns []*MuxConn
 	mux.connsLock.Lock()
@@ -567,6 +575,18 @@ func (conn *MuxConn) Write(b []byte) (n int, err error) {
 		case <-conn.wsigch:
 		}
 		n += len(b)
+	}
+	return
+}
+
+func (conn *MuxConn) WriteBuffers(b [][]byte) (n int, err error) {
+	for _, v := range b {
+		var nbytes int
+		nbytes, err = conn.Write(v)
+		if err != nil {
+			return
+		}
+		n += nbytes
 	}
 	return
 }
