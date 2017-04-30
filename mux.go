@@ -8,6 +8,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/ccsexyz/utils"
 )
 
 const (
@@ -33,7 +35,6 @@ type packet struct {
 	pktid    uint16
 	pktver   uint8
 	pktlen   uint16
-	payload  []byte
 	payloads [][]byte
 	die      chan bool
 	sig      chan bool
@@ -52,7 +53,7 @@ func (p *packet) marshal(b []byte) {
 	b[0] = p.pktype
 	binary.BigEndian.PutUint16(b[1:], p.pktid)
 	b[3] = p.pktver
-	binary.BigEndian.PutUint16(b[4:], uint16(len(p.payload)))
+	binary.BigEndian.PutUint16(b[4:], p.pktlen)
 }
 
 type Mux struct {
@@ -326,23 +327,50 @@ func (mux *Mux) writeLoop() {
 		case <-mux.die:
 			return
 		}
-		pktbuf := make([]byte, pktHdrlen)
-		if len(pkt.payload) == 0 && pkt.pktype != mpsh {
-			pkt.payload = zerobuf[:rand.Intn(16)]
+		if len(pkt.payloads) == 0 && pkt.pktype != mpsh {
+			pkt.payloads = [][]byte{zerobuf[:rand.Intn(16)]}
 		}
-		pkt.marshal(pktbuf)
-		_, err := mux.Write(pktbuf)
+		bufs := make([][]byte, 0, len(pkt.payloads)+1)
+	f1:
+		for {
+			var bs [][]byte
+			var nbytes int
+		f2:
+			for len(pkt.payloads) != 0 {
+				b := pkt.payloads[0]
+				if len(b)+nbytes >= maxSeglen {
+					bs = append(bs, b[:maxSeglen-nbytes])
+					pkt.payloads[0] = b[maxSeglen-nbytes:]
+					nbytes = maxSeglen
+					break f2
+				}
+				bs = append(bs, b)
+				nbytes += len(b)
+				pkt.payloads = pkt.payloads[1:]
+			}
+			pkt.pktlen = uint16(nbytes)
+			pktbuf := make([]byte, pktHdrlen)
+			pkt.marshal(pktbuf)
+			bufs = append(bufs, pktbuf)
+			bufs = append(bufs, bs...)
+			if len(pkt.payloads) == 0 {
+				break f1
+			}
+		}
+		var err error
+		if conn, ok := mux.Conn.(utils.Conn); ok {
+			_, err = conn.WriteBuffers(bufs)
+		} else {
+			nbufs := net.Buffers(bufs)
+			_, err = nbufs.WriteTo(mux)
+		}
 		if err != nil {
 			return
 		}
-		if len(pkt.payload) != 0 {
-			_, err = mux.Write(pkt.payload)
-			if err != nil {
-				return
-			}
-		}
 		if pkt.die != nil && pkt.sig != nil {
 			select {
+			case <-mux.die:
+				return
 			case <-pkt.die:
 			case pkt.sig <- true:
 			}
@@ -526,15 +554,10 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 }
 
 func (conn *MuxConn) Write(b []byte) (n int, err error) {
-	var nbytes int
-	for len(b) > maxSeglen {
-		nbytes, err = conn.Write(b[:maxSeglen])
-		n += nbytes
-		if err != nil {
-			return
-		}
-		b = b[maxSeglen:]
-	}
+	return conn.WriteBuffers([][]byte{b})
+}
+
+func (conn *MuxConn) WriteBuffers(bufs [][]byte) (n int, err error) {
 	conn.lock.Lock()
 	if conn.pause {
 		conn.lock.Unlock()
@@ -548,16 +571,16 @@ func (conn *MuxConn) Write(b []byte) (n int, err error) {
 		}
 	}
 	conn.lock.Unlock()
-	if len(b) == 0 {
+	if len(bufs) == 0 || len(bufs[0]) == 0 {
 		return
 	}
 	pkt := packet{
-		pktid:   conn.id,
-		pktver:  conn.ver,
-		pktype:  mpsh,
-		sig:     conn.wsigch,
-		die:     conn.die,
-		payload: b}
+		pktid:    conn.id,
+		pktver:   conn.ver,
+		pktype:   mpsh,
+		sig:      conn.wsigch,
+		die:      conn.die,
+		payloads: bufs}
 	if conn.wtime.After(time.Now()) {
 		select {
 		case <-conn.die:
@@ -574,19 +597,9 @@ func (conn *MuxConn) Write(b []byte) (n int, err error) {
 		case <-conn.die:
 		case <-conn.wsigch:
 		}
-		n += len(b)
-	}
-	return
-}
-
-func (conn *MuxConn) WriteBuffers(b [][]byte) (n int, err error) {
-	for _, v := range b {
-		var nbytes int
-		nbytes, err = conn.Write(v)
-		if err != nil {
-			return
+		for _, v := range bufs {
+			n += len(v)
 		}
-		n += nbytes
 	}
 	return
 }
