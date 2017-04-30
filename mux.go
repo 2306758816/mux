@@ -56,7 +56,7 @@ func (p *packet) marshal(b []byte) {
 }
 
 type Mux struct {
-	conn      net.Conn // underlying connection, must be reliable
+	net.Conn  // underlying connection, must be reliable
 	lock      sync.Mutex
 	wlock     sync.Mutex
 	writech   chan packet
@@ -73,7 +73,7 @@ type Mux struct {
 
 func NewMux(conn net.Conn) (mux *Mux, err error) {
 	mux = &Mux{
-		conn:     conn,
+		Conn:     conn,
 		die:      make(chan bool),
 		writech:  make(chan packet, 16),
 		acceptch: make(chan *MuxConn),
@@ -133,7 +133,7 @@ func (mux *Mux) Close() (err error) {
 	case <-mux.die:
 		return
 	}
-	err = mux.conn.Close()
+	err = mux.Conn.Close()
 	var conns []*MuxConn
 	mux.connsLock.Lock()
 	for _, v := range mux.conns {
@@ -147,7 +147,7 @@ func (mux *Mux) Close() (err error) {
 }
 
 func (mux *Mux) Addr() net.Addr {
-	return mux.conn.LocalAddr()
+	return mux.LocalAddr()
 }
 
 func (mux *Mux) getID() (id uint16, err error) {
@@ -228,7 +228,7 @@ func (m *Mux) writePacket(pkt packet) (err error) {
 
 func (mux *Mux) readPacket() (pkt packet, err error) {
 	pktbuf := make([]byte, pktHdrlen)
-	_, err = io.ReadFull(mux.conn, pktbuf)
+	_, err = io.ReadFull(mux, pktbuf)
 	if err != nil {
 		return
 	}
@@ -248,7 +248,7 @@ func (mux *Mux) readPacket() (pkt packet, err error) {
 			} else {
 				pktlen -= len(buf)
 			}
-			_, err = io.ReadFull(mux.conn, buf)
+			_, err = io.ReadFull(mux, buf)
 			if err != nil {
 				return
 			}
@@ -257,7 +257,7 @@ func (mux *Mux) readPacket() (pkt packet, err error) {
 	default:
 		if pktlen > 0 {
 			buf := make([]byte, pktlen)
-			_, err = io.ReadFull(mux.conn, buf)
+			_, err = io.ReadFull(mux, buf)
 		}
 	}
 	return
@@ -331,12 +331,12 @@ func (mux *Mux) writeLoop() {
 			pkt.payload = zerobuf[:rand.Intn(16)]
 		}
 		pkt.marshal(pktbuf)
-		_, err := mux.conn.Write(pktbuf)
+		_, err := mux.Write(pktbuf)
 		if err != nil {
 			return
 		}
 		if len(pkt.payload) != 0 {
-			_, err = mux.conn.Write(pkt.payload)
+			_, err = mux.Write(pkt.payload)
 			if err != nil {
 				return
 			}
@@ -618,14 +618,14 @@ func (addr *Addr) String() string {
 
 func (conn *MuxConn) LocalAddr() (addr net.Addr) {
 	return &Addr{
-		Addr: conn.mux.conn.LocalAddr(),
+		Addr: conn.mux.LocalAddr(),
 		id:   conn.id,
 	}
 }
 
 func (conn *MuxConn) RemoteAddr() (addr net.Addr) {
 	return &Addr{
-		Addr: conn.mux.conn.RemoteAddr(),
+		Addr: conn.mux.RemoteAddr(),
 		id:   conn.id,
 	}
 }
