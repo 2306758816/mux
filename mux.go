@@ -147,6 +147,12 @@ func (mux *Mux) Close() (err error) {
 	return
 }
 
+func (mux *Mux) IsClosed() bool {
+	mux.lock.Lock()
+	defer mux.lock.Unlock()
+	return mux.destroy
+}
+
 func (mux *Mux) Addr() net.Addr {
 	return mux.LocalAddr()
 }
