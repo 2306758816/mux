@@ -65,7 +65,7 @@ type Mux struct {
 	destroy   bool
 	avalid    uint16
 	acceptch  chan *MuxConn
-	async     AsyncRunner
+	async     utils.AsyncRunner
 	connsLock sync.Mutex
 	conns     map[uint16]*MuxConn
 	connVers  map[uint16]uint8
@@ -293,7 +293,7 @@ func (mux *Mux) readLoop() {
 			mux.conns[pkt.pktid] = conn
 			mux.connVers[pkt.pktid] = pkt.pktver
 			mux.connsLock.Unlock()
-			mux.async.run(func() {
+			mux.async.Run(func() {
 				select {
 				case <-mux.die:
 					conn.Close()
@@ -313,7 +313,7 @@ func (mux *Mux) readLoop() {
 			delete(mux.conns, pkt.pktid)
 			mux.connsLock.Unlock()
 			c1 := c
-			mux.async.run(func() {
+			mux.async.Run(func() {
 				c1.Close()
 			})
 		case mpse:
@@ -417,7 +417,7 @@ func (mux *Mux) doPshPacket(pkt packet) {
 	}
 	conn.NotifyRead()
 	if rpse {
-		mux.async.run(func() {
+		mux.async.Run(func() {
 			mux.writePacket(packet{
 				pktid:  conn.id,
 				pktver: conn.ver,
