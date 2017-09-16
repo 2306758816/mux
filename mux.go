@@ -507,13 +507,15 @@ func (conn *MuxConn) Read(b []byte) (n int, err error) {
 	for len(conn.rbufs) == 0 {
 		conn.rlock.Unlock()
 		if conn.rtime.After(time.Now()) {
+			rtimer := time.NewTimer(conn.rtime.Sub(time.Now()))
+			defer rtimer.Stop()
 			select {
 			case <-conn.die:
 				err = fmt.Errorf("read from closed MuxConn")
 				return
 			case <-conn.rsigch:
 				conn.rlock.Lock()
-			case <-time.After(conn.rtime.Sub(time.Now())):
+			case <-rtimer.C:
 				err = &timeoutErr{op: fmt.Sprintf("read from %s", conn.RemoteAddr())}
 				return
 			}
@@ -588,10 +590,12 @@ func (conn *MuxConn) WriteBuffers(bufs [][]byte) (n int, err error) {
 		die:      conn.die,
 		payloads: bufs}
 	if conn.wtime.After(time.Now()) {
+		wtimer := time.NewTimer(conn.wtime.Sub(time.Now()))
+		defer wtimer.Stop()
 		select {
 		case <-conn.die:
 			err = fmt.Errorf("closed connection")
-		case <-time.After(conn.wtime.Sub(time.Now())):
+		case <-wtimer.C:
 			err = &timeoutErr{op: fmt.Sprintf("write to %s", conn.RemoteAddr())}
 		case conn.mux.writech <- pkt:
 		}
